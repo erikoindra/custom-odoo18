@@ -20,29 +20,56 @@
 #
 #############################################################################
 import json
+import time
 import logging
 from odoo import http
 from odoo.http import request
 
 _logger = logging.getLogger(__name__)
 
+# Rate limiting settings
+RATE_LIMIT = {}
+RATE_LIMIT_INTERVAL = 60  # Time interval window (seconds)
+RATE_LIMIT_MAX_REQUESTS = 5  # Maximum requests per interval
+
+headers = [('Content-Type', 'application/json')]
 
 class RestApi(http.Controller):
-    """This is a controller which is used to generate responses based on the
-    api requests"""
+    """
+        This is a controller which is used to generate responses based on the
+        api requests
+    """
+
+    def _check_rate_limit(self, api_key):
+        """ Check if the API key has exceeded the rate limit """
+        current_time = time.time()
+
+        if api_key in RATE_LIMIT:
+            requests, first_request_time = RATE_LIMIT[api_key]
+
+            if current_time - first_request_time < RATE_LIMIT_INTERVAL:
+                if requests >= RATE_LIMIT_MAX_REQUESTS:
+                    return False  # Rate limit exceeded
+                RATE_LIMIT[api_key] = (requests + 1, first_request_time)
+            else:
+                RATE_LIMIT[api_key] = (1, current_time)  # Reset rate limit window
+        else:
+            RATE_LIMIT[api_key] = (1, current_time)
+
+        return True
 
     def auth_api_key(self, api_key):
         """This function is used to authenticate the api-key when sending a
         request"""
         user_id = request.env['res.users'].sudo().search([('api_key', '=', api_key)])
         if api_key is not None and user_id:
-             response = True
+            response = True
         elif not user_id:
-            response = ('<html><body><h2>Invalid <i>API Key</i> '
-                        '!</h2></body></html>')
+            error = json.dumps({'error': 'Invalid API Key.'})
+            return request.make_response(data=error, status=403, headers=headers)
         else:
-            response = ("<html><body><h2>No <i>API Key</i> Provided "
-                        "!</h2></body></html>")
+            error = json.dumps({'error': 'No API Key Provided.'})
+            return request.make_response(data=error, status=403, headers=headers)
         return response
 
     def generate_response(self, method, model, rec_id):
@@ -60,19 +87,19 @@ class RestApi(http.Controller):
             for field in data['fields']:
                 fields.append(field)
         if not fields and method != 'DELETE':
-            return ("<html><body><h2>No fields selected for the model"
-                    "</h2></body></html>")
+            error = json.dumps({'error': 'No fields selected for the model.'})
+            return request.make_response(data=error, status=403, headers=headers)
         if not option:
-            return ("<html><body><h2>No Record Created for the model"
-                    "</h2></body></html>")
+            error = json.dumps({'error': 'No Record Created for the model.'})
+            return request.make_response(data=error, status=403, headers=headers)
         try:
             if method == 'GET':
                 fields = []
                 for field in data['fields']:
                     fields.append(field)
                 if not option.is_get:
-                    return ("<html><body><h2>Method Not Allowed"
-                            "</h2></body></html>")
+                    error = json.dumps({'error': 'Method Not Allowed.'})
+                    return request.make_response(data=error, status=403, headers=headers)
                 else:
                     datas = []
                     if rec_id != 0:
@@ -85,7 +112,7 @@ class RestApi(http.Controller):
                             'records': partner_records
                         })
                         datas.append(data)
-                        return request.make_response(data=datas)
+                        return request.make_response(data=datas, headers=headers)
                     else:
                         partner_records = request.env[
                             str(model_name)].search_read(
@@ -96,14 +123,14 @@ class RestApi(http.Controller):
                             'records': partner_records
                         })
                         datas.append(data)
-                        return request.make_response(data=datas)
+                        return request.make_response(data=datas, headers=headers)
         except:
-            return ("<html><body><h2>Invalid JSON Data"
-                    "</h2></body></html>")
+            error = json.dumps({'error': 'Invalid JSON Data.'})
+            return request.make_response(data=error, status=403, headers=headers)
         if method == 'POST':
             if not option.is_post:
-                return ("<html><body><h2>Method Not Allowed"
-                        "</h2></body></html>")
+                error = json.dumps({'error': 'Method Not Allowed.'})
+                return request.make_response(data=error, status=403, headers=headers)
             else:
                 try:
                     data = json.loads(request.httprequest.data)
@@ -117,24 +144,24 @@ class RestApi(http.Controller):
                     )
                     new_data = json.dumps({'New resource': partner_records, })
                     datas.append(new_data)
-                    return request.make_response(data=datas)
+                    return request.make_response(data=datas, headers=headers)
                 except:
-                    return ("<html><body><h2>Invalid JSON Data"
-                            "</h2></body></html>")
+                    error = json.dumps({'error': 'Invalid JSON Data.'})
+                    return request.make_response(data=error, status=403, headers=headers)
         if method == 'PUT':
             if not option.is_put:
-                return ("<html><body><h2>Method Not Allowed"
-                        "</h2></body></html>")
+                error = json.dumps({'error': 'Method Not Allowed.'})
+                return request.make_response(data=error, status=403, headers=headers)
             else:
                 if rec_id == 0:
-                    return ("<html><body><h2>No ID Provided"
-                            "</h2></body></html>")
+                    error = json.dumps({'error': 'No ID Provided.'})
+                    return request.make_response(data=error, status=403, headers=headers)
                 else:
                     resource = request.env[str(model_name)].browse(
                         int(rec_id))
                     if not resource.exists():
-                        return ("<html><body><h2>Resource not found"
-                                "</h2></body></html>")
+                        error = json.dumps({'error': 'Resource not found.'})
+                        return request.make_response(data=error, status=403, headers=headers)
                     else:
                         try:
                             datas = []
@@ -146,28 +173,30 @@ class RestApi(http.Controller):
                                 fields=fields
                             )
                             new_data = json.dumps(
-                                {'Updated resource': partner_records,
-                                 })
+                                {
+                                    'Updated resource': partner_records,
+                                }
+                            )
                             datas.append(new_data)
-                            return request.make_response(data=datas)
+                            return request.make_response(data=datas, headers=headers)
 
                         except:
-                            return ("<html><body><h2>Invalid JSON Data "
-                                    "!</h2></body></html>")
+                            error = json.dumps({'error': 'Invalid JSON Data.'})
+                            return request.make_response(data=error, status=403, headers=headers)
         if method == 'DELETE':
             if not option.is_delete:
-                return ("<html><body><h2>Method Not Allowed"
-                        "</h2></body></html>")
+                error = json.dumps({'error': 'Method Not Allowed.'})
+                return request.make_response(data=error, status=403, headers=headers)
             else:
                 if rec_id == 0:
-                    return ("<html><body><h2>No ID Provided"
-                            "</h2></body></html>")
+                    error = json.dumps({'error': 'No ID Provided.'})
+                    return request.make_response(data=error, status=403, headers=headers)
                 else:
                     resource = request.env[str(model_name)].browse(
                         int(rec_id))
                     if not resource.exists():
-                        return ("<html><body><h2>Resource not found"
-                                "</h2></body></html>")
+                        error = json.dumps({'error': 'Resource not found.'})
+                        return request.make_response(data=error, status=403, headers=headers)
                     else:
 
                         records = request.env[
@@ -176,10 +205,12 @@ class RestApi(http.Controller):
                             fields=['id', 'display_name']
                         )
                         remove = json.dumps(
-                            {"Resource deleted": records,
-                             })
+                            {
+                                "Resource deleted": records,
+                            }
+                        )
                         resource.unlink()
-                        return request.make_response(data=remove)
+                        return request.make_response(data=remove, headers=headers)
 
     @http.route(['/send_request'], type='http',
                 auth='none',
@@ -191,6 +222,9 @@ class RestApi(http.Controller):
         http_method = request.httprequest.method
         api_key = request.httprequest.headers.get('api-key')
         auth_api = self.auth_api_key(api_key)
+        if not self._check_rate_limit(api_key):
+            limit = json.dumps({'error': 'Rate limit exceeded.'})
+            return request.make_response(data=limit, status=429, headers=headers)
         model = kw.get('model')
         username = request.httprequest.headers.get('login')
         password = request.httprequest.headers.get('password')
@@ -199,10 +233,8 @@ class RestApi(http.Controller):
         model_id = request.env['ir.model'].search(
             [('model', '=', model)])
         if not model_id:
-            return ("<html><body><h3>Invalid model, check spelling or maybe "
-                    "the related "
-                    "module is not installed"
-                    "</h3></body></html>")
+            error = json.dumps({'error': 'Invalid model, check spelling or maybe the related module is not installed.'})
+            return request.make_response(data=error, status=403, headers=headers)
 
         if auth_api == True:
             if not kw.get('Id'):
@@ -224,8 +256,11 @@ class RestApi(http.Controller):
         db = request.httprequest.headers.get('db')
         try:
             request.session.update(http.get_default_session(), db=db)
-            credential = {'login': username, 'password': password,
-                          'type': 'password'}
+            credential = {
+                'login': username, 
+                'password': password,
+                'type': 'password'
+            }
 
             auth = request.session.authenticate(db, credential)
             user = request.env['res.users'].browse(auth['uid'])
@@ -233,7 +268,7 @@ class RestApi(http.Controller):
             datas = json.dumps({"Status": "auth successful",
                                 "User": user.name,
                                 "api-key": api_key})
-            return request.make_response(data=datas)
+            return request.make_response(data=datas, headers=headers)
         except:
-            return ("<html><body><h2>wrong login credentials"
-                    "</h2></body></html>")
+            error = json.dumps({'error': 'Wrong Login Credentials.'})
+            return request.make_response(data=error, status=403, headers=headers)

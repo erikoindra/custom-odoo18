@@ -24,7 +24,8 @@ Lesser General Public License v3.0 (LGPL v3)
 
 Credits
 -------
-Developer : (V18) Ayana KP,
+Developer : (v18) Eriko (Rate Limiter) (erikoindra1@gmail.com),
+            (V18) Ayana KP,
             (V16) Yadhushankar,
             (V17) Sruthi pavithran
 Contact: odoo@cybrosys.com
@@ -50,3 +51,7 @@ For support and more information, please visit `Our Website <https://cybrosys.co
 Further information
 ===================
 HTML Description: `<static/description/index.html>`__
+
+Rate limiter usage:
+1. Use variable RATE_LIMIT_INTERVAL to setup the time interval for the limiter in seconds.
+2. Use variable RATE_LIMIT_MAX_REQUESTS to setup the maximum requests per interval time.
